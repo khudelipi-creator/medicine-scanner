@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>মেডিসিন স্ক্যানার — OCR + Excel Export</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', 'Noto Sans Bengali', sans-serif; background: #f0f4f8; color: #1a2b3c; }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 22px; margin: 10px 0 4px; color: #0d47a1; }
+  .sub { font-size: 13px; color: #607d8b; margin-bottom: 14px; }
+  .card { background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,.07); }
+  .card h2 { font-size: 16px; margin-bottom: 10px; color: #1565c0; }
+  video { width: 100%; max-width: 480px; border-radius: 8px; background: #000; display: block; margin-bottom: 8px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+  button { background: #1565c0; color: #fff; border: none; padding: 9px 16px; border-radius: 8px; font-size: 14px; cursor: pointer; }
+  button:hover { background: #0d47a1; }
+  button:disabled { background: #b0bec5; cursor: not-allowed; }
+  button.ghost { background: #eceff1; color: #1565c0; }
+  button.danger { background: #e53935; padding: 4px 10px; font-size: 12px; }
+  .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+  label { font-size: 12px; color: #546e7a; display: block; margin-bottom: 3px; }
+  input, select { width: 100%; padding: 8px 10px; border: 1px solid #cfd8dc; border-radius: 8px; font-size: 14px; }
+  input:focus { border-color: #1565c0; outline: none; }
+  #ocrText { width: 100%; height: 90px; font-size: 12px; font-family: monospace; border: 1px dashed #90a4ae; border-radius: 8px; padding: 8px; background: #fafafa; }
+  #progress { font-size: 13px; color: #ef6c00; margin-top: 6px; min-height: 18px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { border: 1px solid #e0e0e0; padding: 6px 8px; text-align: left; }
+  th { background: #e3f2fd; }
+  tr:nth-child(even) { background: #f7fafc; }
+  .tbl-wrap { overflow-x: auto; }
+  .tip { font-size: 12px; color: #ef6c00; background: #fff8e1; border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
+  .big { font-size: 15px; padding: 11px 22px; }
+  #snapshot { max-width: 200px; border-radius: 8px; display: none; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>💊 মেডিসিন স্ক্যানার</h1>
+  <div class="sub">প্যাকেটের ছবি তুলুন → নাম/জেনেরিক/কোম্পানি/টাইপ অটো পড়ুন → দাম বসান → Excel-এ এক্সপোর্ট করুন</div>
+
+  <div class="card">
+    <h2>১️⃣ প্যাকেটের ছবি তুলুন বা আপলোড করুন</h2>
+    <div class="row">
+      <button id="btnCam" onclick="startCam()">📷 ক্যামেরা চালু করুন</button>
+      <button id="btnStop" onclick="stopCam()" class="ghost" style="display:none">⏹ ক্যামেরা বন্ধ</button>
+      <span style="font-size:13px;color:#78909c">অথবা</span>
+      <input type="file" id="fileUp" accept="image/*" onchange="onFile(this)">
+    </div>
+    <video id="vid" autoplay playsinline muted></video>
+    <div class="row" style="margin-top:6px">
+      <button id="btnScan" onclick="scan()" class="big" disabled>🔍 স্ক্যান করুন (OCR)</button>
+    </div>
+    <img id="snapshot" alt="">
+    <div id="progress"></div>
+    <div class="tip">💡 টিপস: আলো ভালো জায়গায় ছবি তুলুন, প্যাকেট সোজা রাখুন। <b>স্যুডোফেড্রিন/কোডিন</b>-ধরনের লেখা না থাকলে ফ্রন্ট সাইড থেকেই নাম পাওয়া যায়; জেনেরিক নাম সাধারণত পেছনে ছোট হরফে থাকে — সেদিকও তুলতে পারেন।</div>
+  </div>
+
+  <div class="card">
+    <h2>২️⃣ পড়া তথ্য (প্রয়োজনে ঠিক করে নিন)</h2>
+    <div class="fields">
+      <div><label>মেডিসিনের নাম (ব্র্যান্ড)</label><input id="fName" placeholder="যেমন: Napa Extra"></div>
+      <div><label>জেনেরিক নাম</label><input id="fGeneric" placeholder="যেমন: Paracetamol + Caffeine"></div>
+      <div><label>কোম্পানি</label><input id="fCompany" placeholder="যেমন: Beximco Pharmaceuticals Ltd."></div>
+      <div><label>টাইপ</label>
+        <select id="fType">
+          <option value="">— নির্বাচন করুন —</option>
+          <option>ট্যাবলেট</option><option>ক্যাপসুল</option><option>সিরাপ</option>
+          <option>ইনজেকশন</option><option>পাউডার</option><option>ক্রিম/অ্যান্টিমেন্ট</option>
+          <option>স্যাচে</option><option>ড্রপস</option><option>স্প্রে</option><option>অন্যান্য</option>
+        </select>
+      </div>
+      <div><label>স্ট্রেংথ</label><input id="fStrength" placeholder="যেমন: 500mg"></div>
+    </div>
+    <div style="margin-top:10px">
+      <label>OCR থেকে পড়া মূল টেক্সট (রেফারেন্স — এখান থেকে কপি করে ঘরে বসাতে পারেন)</label>
+      <textarea id="ocrText" readonly></textarea>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>৩️⃣ দাম ও পরিমাণ বসান</h2>
+    <div class="fields">
+      <div><label>প্রতি বক্সে মোট মেডিসিন</label><input id="mCount" type="number" min="0" placeholder="যেমন: 100"></div>
+      <div><label>প্রতি পাতায় কয়টি</label><input id="mStrip" type="number" min="0" placeholder="যেমন: 10"></div>
+      <div><label>প্রতি বক্সে পাতা</label><input id="mStrips" type="number" min="0" placeholder="যেমন: 10"></div>
+      <div><label>বক্সের দাম (৳)</label><input id="mPrice" type="number" min="0" step="0.01" placeholder="যেমন: 120"></div>
+      <div><label>১টির দাম (অটো)</label><input id="mUnit" readonly style="background:#eceff1"></div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button onclick="addRow()" class="big">➕ লিস্টে যোগ করুন</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>৪️⃣ আপনার লিস্ট (<span id="rowCount">0</span> টি) — ব্রাউজারে সেভ থাকে</h2>
+    <div class="tbl-wrap">
+    <table>
+      <thead><tr>
+        <th>#</th><th>নাম</th><th>জেনেরিক</th><th>কোম্পানি</th><th>টাইপ</th><th>স্ট্রেংথ</th>
+        <th>বক্সে মোট</th><th>পাতায়</th><th>বক্সে পাতা</th><th>বক্সের দাম ৳</th><th>১টির দাম ৳</th><th></th>
+      </tr></thead>
+      <tbody id="tbl"></tbody>
+    </table>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button onclick="exportXLSX()" class="big">📥 Excel (.xlsx) ডাউনলোড</button>
+      <button onclick="exportCSV()" class="ghost">CSV ডাউনলোড</button>
+      <button onclick="clearAll()" class="danger">🗑 সব মুছুন</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let stream = null;
+const $ = id => document.getElementById(id);
+
+function setProgress(t){ $('progress').textContent = t; }
+
+async function startCam(){
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+    $('vid').srcObject = stream;
+    $('btnCam').disabled = true; $('btnStop').style.display='inline-block'; $('btnScan').disabled = false;
+  }catch(e){ setProgress('❌ ক্যামেরা চালু হয়নি: ' + e.message + ' — (HTTPS/localhost লাগে; না হলে নিচে থেকে ছবি আপলোড করুন)'); }
+}
+function stopCam(){
+  if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
+  $('vid').srcObject = null; $('btnCam').disabled=false; $('btnStop').style.display='none';
+}
+function onFile(inp){
+  const f = inp.files[0]; if(!f) return;
+  const img = new Image();
+  img.onload = ()=>{ doOCR(img); };
+  img.src = URL.createObjectURL(f);
+  $('snapshot').src = img.src; $('snapshot').style.display='block';
+  $('btnScan').disabled = false;
+}
+function scan(){
+  const v = $('vid');
+  if(!stream || !v.videoWidth){ setProgress('⚠️ আগে ক্যামেরা চালু করুন বা ছবি আপলোড করুন'); return; }
+  const c = document.createElement('canvas');
+  c.width = v.videoWidth; c.height = v.videoHeight;
+  c.getContext('2d').drawImage(v,0,0);
+  const img = new Image(); img.onload = ()=>doOCR(img);
+  img.src = c.toDataURL('image/png');
+  $('snapshot').src = img.src; $('snapshot').style.display='block';
+}
+
+async function doOCR(img){
+  setProgress('⏳ OCR চলছে... (প্রথমবার ল্যাংগুয়েজ ফাইল ডাউনলোড হতে একটু সময় লাগবে)');
+  $('btnScan').disabled = true;
+  try{
+    const res = await Tesseract.recognize(img, 'eng', { logger: m => {
+      if(m.status === 'recognizing text') setProgress('⏳ পড়া হচ্ছে... ' + Math.round(m.progress*100) + '%');
+    }});
+    const text = res.data.text || '';
+    $('ocrText').value = text;
+    autoFill(text);
+    setProgress('✅ OCR সম্পন্ন — নিচের ঘরগুলো চেক করে ঠিক করে নিন');
+  }catch(e){ setProgress('❌ OCR ব্যর্থ: ' + e.message); }
+  $('btnScan').disabled = false;
+}
+
+function autoFill(text){
+  const lines = text.split(/\n/).map(l=>l.trim()).filter(l=>l.length>1);
+  // টাইপ
+  const types = [['tablet','ট্যাবলেট'],['capsule','ক্যাপসুল'],['caplet','ট্যাবলেট'],['syrup','সিরাপ'],['suspension','সিরাপ'],['injection','ইনজেকশন'],['powder','পাউডার'],['cream','ক্রিম/অ্যান্টিমেন্ট'],['ointment','ক্রিম/অ্যান্টিমেন্ট'],['gel','ক্রিম/অ্যান্টিমেন্ট'],['sachet','স্যাচে'],['drops','ড্রপস'],['spray','স্প্রে']];
+  const low = text.toLowerCase();
+  for(const [k,v] of types){ if(low.includes(k)){ $('fType').value = v; break; } }
+  // জেনেরিক: "generic" / "composition" / "each ... contains"
+  let gen = '';
+  for(const l of lines){
+    const m = l.match(/generic\s*[:\-]?\s*(.+)/i) || l.match(/composition\s*[:\-]?\s*(.+)/i);
+    if(m){ gen = m[1].replace(/[|*•]/g,' ').trim(); break; }
+  }
+  if(!gen){
+    const each = lines.find(l=>/each (tablet|capsule|caplet|sachet|ml|vial)/i.test(l));
+    if(each) gen = each.replace(/^\S+\s+\S+\s+/,'').replace(/[|*•]/g,' ').trim();
+  }
+  if(gen) $('fGeneric').value = gen;
+  // কোম্পানি: ltd/limited/pharma/lab অ্যাঁথরা লাইন
+  for(const l of lines){
+    if(/(ltd|limited|pharma|laborator|laboratories|biotech)/i.test(l) && l.length < 60){ $('fCompany').value = l; break; }
+  }
+  // স্ট্রেংথ: সংখ্যা + mg/g/ml
+  const sm = text.match(/(\d+(?:\.\d+)?)\s?(mg|mcg|g|ml|iu)\b/i);
+  if(sm) $('fStrength').value = sm[1] + sm[2].toLowerCase();
+  // নাম: প্রথম যে লাইনে বড় হরফের ব্র্যান্ড থাকে
+  for(const l of lines){
+    if(/^[A-Z][A-Za-z0-9&'+\- ]{2,}$/.test(l) && !/ltd|limited|pharma|generic|composition|batch|exp|mfg/i.test(l)){ $('fName').value = l; break; }
+  }
+}
+
+// ============ দাম গণনা ============
+function calcUnit(){
+  const c = parseFloat($('mCount').value), p = parseFloat($('mPrice').value);
+  $('mUnit').value = (c>0 && p>0) ? (p/c).toFixed(2) : '';
+}
+['mCount','mPrice'].forEach(id=> $(id).addEventListener('input', calcUnit));
+
+// ============ লিস্ট ============
+let rows = JSON.parse(localStorage.getItem('medRows') || '[]');
+function save(){ localStorage.setItem('medRows', JSON.stringify(rows)); render(); }
+function render(){
+  $('rowCount').textContent = rows.length;
+  $('tbl').innerHTML = rows.map((r,i)=>`<tr>
+    <td>${i+1}</td><td>${esc(r.name)}</td><td>${esc(r.generic)}</td><td>${esc(r.company)}</td>
+    <td>${esc(r.type)}</td><td>${esc(r.strength)}</td><td>${r.count||''}</td><td>${r.strip||''}</td>
+    <td>${r.strips||''}</td><td>${r.price||''}</td><td>${r.unit||''}</td>
+    <td><button class="danger" onclick="delRow(${i})">✕</button></td></tr>`).join('');
+}
+function esc(s){ return (s||'').replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function delRow(i){ if(confirm('মুছে ফেলবেন?')){ rows.splice(i,1); save(); } }
+function clearAll(){ if(confirm('পুরো লিস্ট মুছে যাবে, নিশ্চিত?')){ rows=[]; save(); } }
+
+function addRow(){
+  const name = $('fName').value.trim();
+  if(!name){ alert('মেডিসিনের নাম দিন!'); return; }
+  rows.push({
+    name, generic:$('fGeneric').value.trim(), company:$('fCompany').value.trim(),
+    type:$('fType').value, strength:$('fStrength').value.trim(),
+    count:$('mCount').value, strip:$('mStrip').value, strips:$('mStrips').value,
+    price:$('mPrice').value, unit:$('mUnit').value
+  });
+  save();
+  ['fName','fGeneric','fCompany','fStrength','mCount','mStrip','mStrips','mPrice','mUnit'].forEach(id=>$(id).value='');
+  $('fType').selectedIndex = 0;
+  alert('✅ লিস্টে যোগ হয়েছে!');
+}
+
+// ============ এক্সপোর্ট ============
+const HEADERS = ['নাম','জেনেরিক নাম','কোম্পানি','টাইপ','স্ট্রেংথ','বক্সে মোট মেডিসিন','পাতায় কয়টি','বক্সে পাতা','বক্সের দাম (৳)','১টির দাম (৳)'];
+function sheetData(){
+  const aoa = [HEADERS, ...rows.map(r=>[r.name,r.generic,r.company,r.type,r.strength,r.count,r.strip,r.strips,r.price,r.unit])];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{wch:20},{wch:25},{wch:28},{wch:12},{wch:10},{wch:12},{wch:10},{wch:10},{wch:12},{wch:12}];
+  return ws;
+}
+function exportXLSX(){
+  if(!rows.length){ alert('লিস্ট খালি!'); return; }
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, sheetData(), 'Medicine List');
+  XLSX.writeFile(wb, 'medicine_list_' + new Date().toISOString().slice(0,10) + '.xlsx');
+}
+function exportCSV(){
+  if(!rows.length){ alert('লিস্ট খালি!'); return; }
+  const ws = sheetData();
+  const csv = XLSX.utils.sheet_to_csv(ws);
+  const blob = new Blob(['\uFEFF' + csv], {type:'text/csv;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'medicine_list_' + new Date().toISOString().slice(0,10) + '.csv';
+  a.click();
+}
+render();
+</script>
+</body>
+</html>
